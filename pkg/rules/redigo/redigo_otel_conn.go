@@ -63,20 +63,20 @@ func (a *armsConn) Do(commandName string, args ...interface{}) (reply interface{
 }
 
 func (a *armsConn) Send(commandName string, args ...interface{}) error {
-	now := time.Now()
 	req := &redigoRequest{
-		args:      args,
-		endpoint:  a.endpoint,
-		cmd:       commandName,
-		startTime: now,
+		args:     args,
+		endpoint: a.endpoint,
+		cmd:      commandName,
 	}
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	req.ctx = ctx
-	push(req)
-	return a.Conn.Send(commandName, args...)
+	startTime := time.Now()
+	err := a.Conn.Send(commandName, args...)
+	endTime := time.Now()
+	redigoInstrumenter.StartAndEnd(ctx, req, nil, err, startTime, endTime)
+	return err
 }
 
 func (a *armsConn) Flush() error {
