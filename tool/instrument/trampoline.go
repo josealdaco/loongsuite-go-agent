@@ -243,7 +243,7 @@ func (rp *RuleProcessor) callOnEnterHook(t *rules.InstFuncRule, traits []ParamTr
 	// target function
 	if rp.exact {
 		util.Assert(len(traits) == (len(rp.onEnterHookFunc.Type.Params.List)+1),
-			"hook func signature can not match with target function")
+			"hook func signature can not match with target function | Param")
 	}
 	// Hook: 	   func onEnterFoo(callContext* CallContext, p*[]int)
 	// Trampoline: func OtelOnEnterTrampoline_foo(p *[]int)
