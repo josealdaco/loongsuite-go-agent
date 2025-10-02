@@ -71,10 +71,13 @@ func (a *armsConn) Do(commandName string, args ...interface{}) (reply interface{
 			r := pop(transactionQueue)
 			if r != nil && strings.ToLower(r.cmd) != "multi" {
 				string_builder.WriteString(r.cmd + " ")
-				for _, arg := range r.args {
-					string_builder.WriteString(fmt.Sprintf("%v ", arg))
+				for i, arg := range r.args {
+					string_builder.WriteString(fmt.Sprintf("%v", arg))
+					if i < len(r.args)-1 {
+						string_builder.WriteString(" ")
+					}
 				}
-				string_builder.WriteString(";")
+				string_builder.WriteString("; ")
 			}
 		}
 		req.cmd = "EXEC"
