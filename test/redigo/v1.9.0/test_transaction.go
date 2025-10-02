@@ -22,6 +22,7 @@ func main() {
 	fmt.Println(r) // prints [1, 1]
 
 	verifier.WaitAndAssertTraces(func(stubs []tracetest.SpanStubs) {
-		verifier.VerifyDbAttributes(stubs[0][0], "EXEC", "redis", "localhost", "EXEC", "EXEC", "", nil)
+		fmt.Println("Stubs:", stubs)
+		verifier.VerifyDbAttributes(stubs[0][0], "EXEC", "redis", "localhost", "EXEC INCR foo; INCR bar;", "EXEC", "", nil)
 	}, 1)
 }
