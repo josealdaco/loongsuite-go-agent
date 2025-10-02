@@ -83,6 +83,7 @@ func (a *armsConn) Do(commandName string, args ...interface{}) (reply interface{
 		req.cmd = "EXEC"
 		req.args = []interface{}{string_builder.String()}
 		redigoInstrumenter.StartAndEnd(ctx, req, nil, err, startTime, endTime)
+		transactionQueue.Init() // purge the transaction queue after EXEC
 	case "discard":
 		// Purge the transaction queue
 		transactionQueue.Init()
