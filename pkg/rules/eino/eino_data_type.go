@@ -16,8 +16,8 @@ package eino
 
 import (
 	"os"
-	"sync"
 
+	"github.com/alibaba/loongsuite-go-agent/pkg/inst-api-semconv/instrumenter/ai"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -40,15 +40,8 @@ type (
 	loaderRequestKey    struct{}
 	toolRequestKey      struct{}
 	transformRequestKey struct{}
-)
-
-var (
-	once       sync.Once
-	openaiOnce sync.Once
-	ollamaOnce sync.Once
-	arkOnce    sync.Once
-	qwenOnce   sync.Once
-	claudeOnce sync.Once
+	composeRequestKey   struct{}
+	einoRootSpanKey     struct{}
 )
 
 const (
@@ -65,6 +58,7 @@ const (
 
 type einoRequest struct {
 	operationName string
+	spanKind      ai.GenAISpanKind
 	input         map[string]interface{}
 }
 
@@ -75,6 +69,7 @@ type einoResponse struct {
 
 type einoLLMRequest struct {
 	operationName    string
+	spanKind         ai.GenAISpanKind
 	modelName        string
 	encodingFormats  []string
 	frequencyPenalty float64
@@ -88,6 +83,7 @@ type einoLLMRequest struct {
 	serverAddress    string
 	seed             int64
 	input            []*schema.Message
+	inputMsg         string
 }
 
 type einoLLMResponse struct {

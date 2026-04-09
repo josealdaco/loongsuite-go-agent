@@ -204,11 +204,15 @@ func (a AIClientMetric) OnAfterEnd(ctx context.Context, endAttributes []attribut
 	for _, kv := range endAttributes {
 		switch kv.Key {
 		case semconv.GenAIUsageInputTokensKey:
-			inputTokens = kv.Value
-			hasInputTokens = true
+			if !hasInputTokens {
+				inputTokens = kv.Value
+				hasInputTokens = true
+			}
 		case semconv.GenAIUsageOutputTokensKey:
-			outputTokens = kv.Value
-			hasOutputTokens = true
+			if !hasOutputTokens {
+				outputTokens = kv.Value
+				hasOutputTokens = true
+			}
 		}
 		if hasInputTokens && hasOutputTokens {
 			break

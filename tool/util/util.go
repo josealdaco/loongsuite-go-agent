@@ -16,7 +16,6 @@ package util
 
 import (
 	"encoding/json"
-	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
@@ -60,36 +59,6 @@ func InInstrument() bool {
 	return rp == PInstrument
 }
 
-func GuaranteeInPreprocess() {
-	Assert(rp == PPreprocess, "not in preprocess stage")
-}
-
-func GuaranteeInInstrument() {
-	Assert(rp == PInstrument, "not in instrument stage")
-}
-
-func Assert(cond bool, format string, args ...interface{}) {
-	if !cond {
-		panic(fmt.Sprintf(format, args...))
-	}
-}
-
-func Unimplemented() {
-	panic("unimplemented")
-}
-
-func UnimplementedT(msg string) {
-	panic("unimplemented: " + msg)
-}
-
-func ShouldNotReachHere() {
-	panic("should not reach here")
-}
-
-func ShouldNotReachHereT(msg string) {
-	panic("should not reach here: " + msg)
-}
-
 func RunCmd(args ...string) error {
 	path := args[0]
 	args = args[1:]
@@ -99,15 +68,23 @@ func RunCmd(args ...string) error {
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	if err != nil {
-		return ex.Errorf(err, "command %v", args)
+		return ex.Wrapf(err, "command %v", args)
 	}
 	return nil
 }
 
 func CopyFile(src, dst string) error {
+	_, err := os.Stat(filepath.Dir(dst))
+	if os.IsNotExist(err) {
+		err = os.MkdirAll(filepath.Dir(dst), 0o755)
+		if err != nil {
+			return ex.Wrap(err)
+		}
+	}
+
 	sourceFile, err := os.Open(src)
 	if err != nil {
-		return ex.Error(err)
+		return ex.Wrap(err)
 	}
 	defer func(sourceFile *os.File) {
 		err := sourceFile.Close()
@@ -118,7 +95,7 @@ func CopyFile(src, dst string) error {
 
 	destFile, err := os.Create(dst)
 	if err != nil {
-		return ex.Error(err)
+		return ex.Wrap(err)
 	}
 	defer func(destFile *os.File) {
 		err := destFile.Close()
@@ -129,7 +106,7 @@ func CopyFile(src, dst string) error {
 
 	_, err = io.Copy(destFile, sourceFile)
 	if err != nil {
-		return ex.Error(err)
+		return ex.Wrap(err)
 	}
 	return nil
 }
@@ -137,7 +114,7 @@ func CopyFile(src, dst string) error {
 func ReadFile(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return "", ex.Error(err)
+		return "", ex.Wrap(err)
 	}
 	defer func(file *os.File) {
 		err := file.Close()
@@ -149,7 +126,7 @@ func ReadFile(filePath string) (string, error) {
 	buf := new(strings.Builder)
 	_, err = io.Copy(buf, file)
 	if err != nil {
-		return "", ex.Error(err)
+		return "", ex.Wrap(err)
 	}
 	return buf.String(), nil
 
@@ -158,7 +135,7 @@ func ReadFile(filePath string) (string, error) {
 func WriteFile(filePath string, content string) (string, error) {
 	file, err := os.Create(filePath)
 	if err != nil {
-		return "", ex.Error(err)
+		return "", ex.Wrap(err)
 	}
 	defer func(file *os.File) {
 		err := file.Close()
@@ -169,7 +146,7 @@ func WriteFile(filePath string, content string) (string, error) {
 
 	_, err = file.WriteString(content)
 	if err != nil {
-		return "", ex.Error(err)
+		return "", ex.Wrap(err)
 	}
 	return file.Name(), nil
 }
@@ -178,7 +155,7 @@ func ListFiles(dir string) ([]string, error) {
 	var files []string
 	walkFn := func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return ex.Error(err)
+			return ex.Wrap(err)
 		}
 		// Don't list files under hidden directories
 		if strings.HasPrefix(info.Name(), ".") {
@@ -191,7 +168,7 @@ func ListFiles(dir string) ([]string, error) {
 	}
 	err := filepath.Walk(dir, walkFn)
 	if err != nil {
-		return nil, ex.Error(err)
+		return nil, ex.Wrap(err)
 	}
 	return files, nil
 }
@@ -204,18 +181,18 @@ func CopyDirExclude(src string, dst string, exclude []string) error {
 	// Get the properties of the source directory
 	sourceInfo, err := os.Stat(src)
 	if err != nil {
-		return ex.Error(err)
+		return ex.Wrap(err)
 	}
 
 	// Create the destination directory
 	if err := os.MkdirAll(dst, sourceInfo.Mode()); err != nil {
-		return ex.Error(err)
+		return ex.Wrap(err)
 	}
 
 	// Read the contents of the source directory
 	entries, err := os.ReadDir(src)
 	if err != nil {
-		return ex.Error(err)
+		return ex.Wrap(err)
 	}
 
 	// Iterate through each entry in the source directory
@@ -274,7 +251,7 @@ func GetToolName() (string, error) {
 	// Get the path of the current executable
 	e, err := os.Executable()
 	if err != nil {
-		return "", ex.Error(err)
+		return "", ex.Wrap(err)
 	}
 	return filepath.Base(e), nil
 }

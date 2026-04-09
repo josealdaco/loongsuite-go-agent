@@ -1,36 +1,29 @@
 module example/demo
 
-go 1.23.0
+go 1.24.0
+
+toolchain go1.24.11
 
 replace github.com/alibaba/loongsuite-go-agent => ../../
 
 replace github.com/alibaba/loongsuite-go-agent/test/verifier => ../../test/verifier
 
 require (
-	github.com/go-mysql-org/go-mysql v1.13.0
-	github.com/gomodule/redigo v1.9.2
-	github.com/juju/errors v1.0.0
+	github.com/go-sql-driver/mysql v1.8.1
+	github.com/redis/go-redis/v9 v9.5.1
 )
 
 require (
-	github.com/go-logr/logr v1.4.2 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/google/uuid v1.3.0 // indirect
-	github.com/klauspost/compress v1.17.8 // indirect
-	github.com/pingcap/errors v0.11.5-0.20250318082626-8f80e5cb09ec // indirect
-	github.com/pingcap/log v1.1.1-0.20241212030209-7e3ff8601a2a // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20250421232622-526b2c79173d // indirect
-	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/otel/metric v1.35.0 // indirect
-	go.opentelemetry.io/otel/trace v1.35.0 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/otel/metric v1.40.0 // indirect
+	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 )
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	go.opentelemetry.io/otel v1.35.0
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	go.opentelemetry.io/otel v1.40.0
 )

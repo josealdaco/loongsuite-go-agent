@@ -16,118 +16,176 @@ package ollama
 
 import (
 	"context"
-	_ "unsafe" // Required for go:linkname
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"net/url"
+	"reflect"
+	"unsafe"
 
 	"github.com/alibaba/loongsuite-go-agent/pkg/api"
+	"github.com/alibaba/loongsuite-go-agent/pkg/inst-api-semconv/instrumenter/ai"
 	ollamaapi "github.com/ollama/ollama/api"
 )
 
-const (
-	contentPreviewMaxLen = 100 // Maximum length for content preview in span events
-)
-
-// Helper function to truncate strings for span attributes
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+func extractServerAddress(c *ollamaapi.Client) string {
+	if c == nil {
+		return ""
 	}
-	return s[:maxLen] + "..."
+	clientValue := reflect.ValueOf(c).Elem()
+	baseField := clientValue.FieldByName("base")
+	if baseField.IsValid() && !baseField.IsNil() {
+		baseURL := reflect.NewAt(baseField.Type(), unsafe.Pointer(baseField.UnsafeAddr())).Elem().Interface().(*url.URL)
+		if baseURL != nil {
+			return baseURL.Host
+		}
+	}
+	return ""
 }
 
-// GENERATE API HOOKS
+func extractOptionsFromMap(opts map[string]interface{}) (
+	temperature float64,
+	maxTokens int64,
+	topK float64,
+	topP float64,
+	frequencyPenalty float64,
+	presencePenalty float64,
+	stopSequences []string,
+	seed int64,
+) {
+	if opts == nil {
+		return
+	}
+
+	if val, ok := opts["temperature"]; ok {
+		switch v := val.(type) {
+		case float64:
+			temperature = v
+		case float32:
+			temperature = float64(v)
+		}
+	}
+
+	if val, ok := opts["num_predict"]; ok {
+		switch v := val.(type) {
+		case float64:
+			maxTokens = int64(v)
+		case int:
+			maxTokens = int64(v)
+		case int64:
+			maxTokens = v
+		}
+	}
+
+	if val, ok := opts["top_k"]; ok {
+		switch v := val.(type) {
+		case float64:
+			topK = v
+		case int:
+			topK = float64(v)
+		case int64:
+			topK = float64(v)
+		}
+	}
+
+	if val, ok := opts["top_p"]; ok {
+		switch v := val.(type) {
+		case float64:
+			topP = v
+		case float32:
+			topP = float64(v)
+		}
+	}
+
+	if val, ok := opts["frequency_penalty"]; ok {
+		switch v := val.(type) {
+		case float64:
+			frequencyPenalty = v
+		case float32:
+			frequencyPenalty = float64(v)
+		}
+	}
+
+	if val, ok := opts["presence_penalty"]; ok {
+		switch v := val.(type) {
+		case float64:
+			presencePenalty = v
+		case float32:
+			presencePenalty = float64(v)
+		}
+	}
+
+	if val, ok := opts["stop"]; ok {
+		if arr, ok := val.([]interface{}); ok {
+			stopSequences = make([]string, 0, len(arr))
+			for _, v := range arr {
+				if str, ok := v.(string); ok {
+					stopSequences = append(stopSequences, str)
+				}
+			}
+		} else if arr, ok := val.([]string); ok {
+			stopSequences = arr
+		}
+	}
+
+	if val, ok := opts["seed"]; ok {
+		switch v := val.(type) {
+		case float64:
+			seed = int64(v)
+		case int:
+			seed = int64(v)
+		case int64:
+			seed = v
+		}
+	}
+
+	return
+}
+
 
 //go:linkname clientGenerateOnEnter github.com/ollama/ollama/api.clientGenerateOnEnter
 func clientGenerateOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.GenerateRequest, fn ollamaapi.GenerateResponseFunc) {
-	// Detect streaming mode (Stream is nil or *Stream is true)
 	isStreaming := req.Stream == nil || (req.Stream != nil && *req.Stream)
+	temp, maxTok, tk, tp, fp, pp, stop, seed := extractOptionsFromMap(req.Options)
 
-	// Create request tracking object
 	ollamaReq := ollamaRequest{
-		operationType: "generate",
-		model:         req.Model,
-		prompt:        req.Prompt,
-		isStreaming:   isStreaming,
+		operationType:    "generate",
+		model:            req.Model,
+		prompt:           req.Prompt,
+		isStreaming:      isStreaming,
+		serverAddress:    extractServerAddress(c),
+		temperature:      temp,
+		maxTokens:        maxTok,
+		topK:             tk,
+		topP:             tp,
+		frequencyPenalty: fp,
+		presencePenalty:  pp,
+		stopSequences:    stop,
+		seed:             seed,
 	}
-
-	// Start OpenTelemetry span
 	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
-
-	// Update context parameter
 	call.SetParam(1, ctx)
-
-	// Initialize streaming state if streaming
 	var streamState *streamingState
 	if isStreaming {
-		streamState = newStreamingState()
+		streamState = newStreamingState(req.Model)
 	}
-
-	// CRITICAL: Wrap the callback to capture response data
 	var finalResponse ollamaapi.GenerateResponse
 	var wrappedFn ollamaapi.GenerateResponseFunc = func(resp ollamaapi.GenerateResponse) error {
-		// Handle streaming chunks
 		if isStreaming && streamState != nil {
-			// Record chunk data
-			hasContent := resp.Response != ""
-			streamState.recordChunk(resp.Response, hasContent, resp.EvalCount)
+			streamState.recordChunk(resp.Response, resp.EvalCount)
 
-			// Record span events for streaming milestones
-			if span := trace.SpanFromContext(ctx); span.IsRecording() {
-				// First token event
-				if streamState.chunkCount == 1 && hasContent {
-					span.AddEvent("First token received",
-						trace.WithAttributes(
-							attribute.Int64("gen_ai.response.ttft_ms", streamState.getTTFTMillis()),
-							attribute.Int("chunk_number", streamState.chunkCount),
-						))
-				}
-
-				// Periodic updates (every 10 chunks or 500ms)
-				if streamState.shouldRecordEvent() {
-					span.AddEvent("Streaming progress",
-						trace.WithAttributes(
-							attribute.Int("chunk_count", streamState.chunkCount),
-							attribute.Int("tokens_generated", streamState.runningTokenCount),
-							attribute.String("content_preview", truncateString(streamState.responseBuilder.String(), contentPreviewMaxLen)),
-						))
-				}
-
-				// Final chunk event
-				if resp.Done {
-					span.AddEvent("Streaming completed",
-						trace.WithAttributes(
-							attribute.Int("total_chunks", streamState.chunkCount),
-							attribute.Int("total_tokens", resp.EvalCount),
-							attribute.Float64("tokens_per_second", streamState.tokenRate),
-						))
-				}
-			}
-
-			// Check if this is the final chunk
 			if resp.Done {
 				streamState.finalize(resp.PromptEvalCount, resp.EvalCount, resp.TotalDuration)
 			}
 		}
 
-		// Always update with latest response
-		// The final response will have Done=true
 		if resp.Done {
 			finalResponse = resp
 		}
 
-		// Call the original callback if provided
 		if fn != nil {
 			return fn(resp)
 		}
 		return nil
 	}
-
-	// Replace the callback parameter with our wrapped version
 	call.SetParam(3, wrappedFn)
-
-	// Store context and response pointer for OnExit
 	data := make(map[string]interface{})
 	data["ctx"] = ctx
 	data["request"] = &ollamaReq
@@ -140,42 +198,27 @@ func clientGenerateOnEnter(call api.CallContext, c *ollamaapi.Client, ctx contex
 
 //go:linkname clientGenerateOnExit github.com/ollama/ollama/api.clientGenerateOnExit
 func clientGenerateOnExit(call api.CallContext, err error) {
-	// Retrieve data stored in OnEnter
 	data, ok := call.GetData().(map[string]interface{})
 	if !ok {
 		return
 	}
-
-	// Get context from data
 	ctx, ok := data["ctx"].(context.Context)
 	if !ok {
 		return
 	}
-
-	// Get request from data
 	reqPtr, ok := data["request"].(*ollamaRequest)
 	if !ok || reqPtr == nil {
 		return
 	}
-
-	// Get streaming state if present
 	streamState, isStreaming := data["streamingState"].(*streamingState)
-
-	// Create response object
 	ollamaResp := ollamaResponse{
 		err: err,
 	}
-
-	// Add streaming metrics if this was a streaming request
 	if isStreaming && streamState != nil {
 		ollamaResp.streamingMetrics = streamState
 	}
-
-	// Extract response data if no error
 	if err == nil {
-		// Get the final response captured by our wrapped callback
 		if respPtr, ok := data["finalResponsePtr"].(*ollamaapi.GenerateResponse); ok && respPtr != nil {
-			// For streaming, use accumulated content
 			if isStreaming && streamState != nil {
 				ollamaResp.content = streamState.responseBuilder.String()
 				ollamaResp.promptTokens = streamState.promptEvalCount
@@ -186,107 +229,64 @@ func clientGenerateOnExit(call api.CallContext, err error) {
 				ollamaResp.content = respPtr.Response
 			}
 
-			// Update request with token counts for the instrumenter
 			reqPtr.promptTokens = ollamaResp.promptTokens
 			reqPtr.completionTokens = ollamaResp.completionTokens
 		}
 	}
-
-	// End OpenTelemetry span
+	// Set TTFT in context for metrics if streaming
+	if isStreaming && streamState != nil && streamState.firstTokenTime != nil {
+		ctx = context.WithValue(ctx, ai.TimeToFirstTokenKey{}, *streamState.firstTokenTime)
+	}
 	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
 }
 
-// CHAT API HOOKS
 
 //go:linkname clientChatOnEnter github.com/ollama/ollama/api.clientChatOnEnter
 func clientChatOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.ChatRequest, fn ollamaapi.ChatResponseFunc) {
-	// Detect streaming mode (Stream is nil or *Stream is true)
 	isStreaming := req.Stream == nil || (req.Stream != nil && *req.Stream)
+	temp, maxTok, tk, tp, fp, pp, stop, seed := extractOptionsFromMap(req.Options)
 
-	// Create request tracking object
 	ollamaReq := ollamaRequest{
-		operationType: "chat",
-		model:         req.Model,
-		messages:      req.Messages,
-		isStreaming:   isStreaming,
+		operationType:    "chat",
+		model:            req.Model,
+		messages:         req.Messages,
+		isStreaming:      isStreaming,
+		serverAddress:    extractServerAddress(c),
+		temperature:      temp,
+		maxTokens:        maxTok,
+		topK:             tk,
+		topP:             tp,
+		frequencyPenalty: fp,
+		presencePenalty:  pp,
+		stopSequences:    stop,
+		seed:             seed,
 	}
-
-	// Start OpenTelemetry span
 	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
-
-	// Update context parameter
 	call.SetParam(1, ctx)
-
-	// Initialize streaming state if streaming
 	var streamState *streamingState
 	if isStreaming {
-		streamState = newStreamingState()
+		streamState = newStreamingState(req.Model)
 	}
-
-	// CRITICAL: Wrap the callback to capture response data
 	var finalResponse ollamaapi.ChatResponse
 	var wrappedFn ollamaapi.ChatResponseFunc = func(resp ollamaapi.ChatResponse) error {
-		// Handle streaming chunks
 		if isStreaming && streamState != nil {
-			// Record chunk data (for chat, content is in Message.Content)
-			hasContent := resp.Message.Content != ""
-			streamState.recordChunk(resp.Message.Content, hasContent, resp.EvalCount)
+			streamState.recordChunk(resp.Message.Content, resp.EvalCount)
 
-			// Record span events for streaming milestones
-			if span := trace.SpanFromContext(ctx); span.IsRecording() {
-				// First token event
-				if streamState.chunkCount == 1 && hasContent {
-					span.AddEvent("First token received",
-						trace.WithAttributes(
-							attribute.Int64("gen_ai.response.ttft_ms", streamState.getTTFTMillis()),
-							attribute.Int("chunk_number", streamState.chunkCount),
-						))
-				}
-
-				// Periodic updates (every 10 chunks or 500ms)
-				if streamState.shouldRecordEvent() {
-					span.AddEvent("Streaming progress",
-						trace.WithAttributes(
-							attribute.Int("chunk_count", streamState.chunkCount),
-							attribute.Int("tokens_generated", streamState.runningTokenCount),
-							attribute.String("content_preview", truncateString(streamState.responseBuilder.String(), contentPreviewMaxLen)),
-						))
-				}
-
-				// Final chunk event
-				if resp.Done {
-					span.AddEvent("Streaming completed",
-						trace.WithAttributes(
-							attribute.Int("total_chunks", streamState.chunkCount),
-							attribute.Int("total_tokens", resp.EvalCount),
-							attribute.Float64("tokens_per_second", streamState.tokenRate),
-						))
-				}
-			}
-
-			// Check if this is the final chunk
 			if resp.Done {
 				streamState.finalize(resp.PromptEvalCount, resp.EvalCount, resp.TotalDuration)
 			}
 		}
 
-		// Always update with latest response
-		// The final response will have Done=true
 		if resp.Done {
 			finalResponse = resp
 		}
 
-		// Call the original callback if provided
 		if fn != nil {
 			return fn(resp)
 		}
 		return nil
 	}
-
-	// Replace the callback parameter with our wrapped version
 	call.SetParam(3, wrappedFn)
-
-	// Store context and response pointer for OnExit
 	data := make(map[string]interface{})
 	data["ctx"] = ctx
 	data["request"] = &ollamaReq
@@ -299,59 +299,338 @@ func clientChatOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Co
 
 //go:linkname clientChatOnExit github.com/ollama/ollama/api.clientChatOnExit
 func clientChatOnExit(call api.CallContext, err error) {
-	// Retrieve data stored in OnEnter
 	data, ok := call.GetData().(map[string]interface{})
 	if !ok {
 		return
 	}
-
-	// Get context from data
 	ctx, ok := data["ctx"].(context.Context)
 	if !ok {
 		return
 	}
-
-	// Get request from data
 	reqPtr, ok := data["request"].(*ollamaRequest)
 	if !ok || reqPtr == nil {
 		return
 	}
-
-	// Get streaming state if present
 	streamState, isStreaming := data["streamingState"].(*streamingState)
-
-	// Create response object
 	ollamaResp := ollamaResponse{
 		err: err,
 	}
-
-	// Add streaming metrics if this was a streaming request
 	if isStreaming && streamState != nil {
 		ollamaResp.streamingMetrics = streamState
 	}
-
-	// Extract response data if no error
 	if err == nil {
-		// Get the final response captured by our wrapped callback
 		if respPtr, ok := data["finalResponsePtr"].(*ollamaapi.ChatResponse); ok && respPtr != nil {
-			// For streaming, use accumulated content
 			if isStreaming && streamState != nil {
 				ollamaResp.content = streamState.responseBuilder.String()
 				ollamaResp.promptTokens = streamState.promptEvalCount
 				ollamaResp.completionTokens = streamState.evalCount
 			} else {
-				// Token counts are in embedded Metrics struct
-				ollamaResp.promptTokens = respPtr.PromptEvalCount
+					ollamaResp.promptTokens = respPtr.PromptEvalCount
 				ollamaResp.completionTokens = respPtr.EvalCount
 				ollamaResp.content = respPtr.Message.Content
 			}
 
-			// Update request with token counts for the instrumenter
 			reqPtr.promptTokens = ollamaResp.promptTokens
 			reqPtr.completionTokens = ollamaResp.completionTokens
 		}
 	}
+	// Set TTFT in context for metrics if streaming
+	if isStreaming && streamState != nil && streamState.firstTokenTime != nil {
+		ctx = context.WithValue(ctx, ai.TimeToFirstTokenKey{}, *streamState.firstTokenTime)
+	}
+	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
+}
 
-	// End OpenTelemetry span
+//go:linkname clientEmbedOnEnter github.com/ollama/ollama/api.clientEmbedOnEnter
+func clientEmbedOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.EmbedRequest) {
+	var promptStr string
+	if s, ok := req.Input.(string); ok {
+		promptStr = s
+	}
+	temp, maxTok, tk, tp, fp, pp, stop, seed := extractOptionsFromMap(req.Options)
+
+	ollamaReq := ollamaRequest{
+		operationType:    "embed",
+		model:            req.Model,
+		prompt:           promptStr,
+		embeddingCount:   1,
+		serverAddress:    extractServerAddress(c),
+		temperature:      temp,
+		maxTokens:        maxTok,
+		topK:             tk,
+		topP:             tp,
+		frequencyPenalty: fp,
+		presencePenalty:  pp,
+		stopSequences:    stop,
+		seed:             seed,
+	}
+	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
+	call.SetParam(1, ctx)
+	data := make(map[string]interface{})
+	data["ctx"] = ctx
+	data["request"] = &ollamaReq
+	call.SetData(data)
+}
+
+//go:linkname clientEmbedOnExit github.com/ollama/ollama/api.clientEmbedOnExit
+func clientEmbedOnExit(call api.CallContext, resp *ollamaapi.EmbedResponse, err error) {
+	data, ok := call.GetData().(map[string]interface{})
+	if !ok {
+		return
+	}
+	ctx, ok := data["ctx"].(context.Context)
+	if !ok {
+		return
+	}
+	reqPtr, ok := data["request"].(*ollamaRequest)
+	if !ok || reqPtr == nil {
+		return
+	}
+	ollamaResp := ollamaResponse{}
+	ollamaResp.err = err
+	if err == nil && resp != nil {
+		if len(resp.Embeddings) > 0 {
+			embeddings := make([][]float64, len(resp.Embeddings))
+			for i, emb := range resp.Embeddings {
+				embeddings[i] = make([]float64, len(emb))
+				for j, v := range emb {
+					embeddings[i][j] = float64(v)
+				}
+			}
+			ollamaResp.embeddings = embeddings
+			reqPtr.embeddingDim = len(resp.Embeddings[0])
+		}
+	}
+	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
+}
+
+//go:linkname clientEmbeddingsOnEnter github.com/ollama/ollama/api.clientEmbeddingsOnEnter
+func clientEmbeddingsOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.EmbeddingRequest) {
+	temp, maxTok, tk, tp, fp, pp, stop, seed := extractOptionsFromMap(req.Options)
+
+	ollamaReq := ollamaRequest{
+		operationType:    "embeddings",
+		model:            req.Model,
+		prompt:           req.Prompt,
+		embeddingCount:   1,
+		serverAddress:    extractServerAddress(c),
+		temperature:      temp,
+		maxTokens:        maxTok,
+		topK:             tk,
+		topP:             tp,
+		frequencyPenalty: fp,
+		presencePenalty:  pp,
+		stopSequences:    stop,
+		seed:             seed,
+	}
+	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
+	call.SetParam(1, ctx)
+	data := make(map[string]interface{})
+	data["ctx"] = ctx
+	data["request"] = &ollamaReq
+	call.SetData(data)
+}
+
+//go:linkname clientEmbeddingsOnExit github.com/ollama/ollama/api.clientEmbeddingsOnExit
+func clientEmbeddingsOnExit(call api.CallContext, resp *ollamaapi.EmbeddingResponse, err error) {
+	data, ok := call.GetData().(map[string]interface{})
+	if !ok {
+		return
+	}
+	ctx, ok := data["ctx"].(context.Context)
+	if !ok {
+		return
+	}
+	reqPtr, ok := data["request"].(*ollamaRequest)
+	if !ok || reqPtr == nil {
+		return
+	}
+	ollamaResp := ollamaResponse{}
+	ollamaResp.err = err
+	if err == nil && resp != nil {
+		if len(resp.Embedding) > 0 {
+			reqPtr.embeddingDim = len(resp.Embedding)
+		}
+	}
+	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
+}
+
+//go:linkname clientPullOnEnter github.com/ollama/ollama/api.clientPullOnEnter
+func clientPullOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.PullRequest, fn ollamaapi.PullProgressFunc) {
+	ollamaReq := ollamaRequest{
+		operationType:  "pull",
+		model:          req.Model,
+		modelOperation: "pull",
+		serverAddress:  extractServerAddress(c),
+	}
+	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
+	call.SetParam(1, ctx)
+	data := make(map[string]interface{})
+	data["ctx"] = ctx
+	data["request"] = &ollamaReq
+	call.SetData(data)
+}
+
+//go:linkname clientPullOnExit github.com/ollama/ollama/api.clientPullOnExit
+func clientPullOnExit(call api.CallContext, err error) {
+	data, ok := call.GetData().(map[string]interface{})
+	if !ok {
+		return
+	}
+	ctx, ok := data["ctx"].(context.Context)
+	if !ok {
+		return
+	}
+	reqPtr, ok := data["request"].(*ollamaRequest)
+	if !ok || reqPtr == nil {
+		return
+	}
+	ollamaResp := ollamaResponse{
+		err: err,
+	}
+	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
+}
+
+//go:linkname clientListOnEnter github.com/ollama/ollama/api.clientListOnEnter
+func clientListOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context) {
+	ollamaReq := ollamaRequest{
+		operationType:  "list",
+		modelOperation: "list",
+		serverAddress:  extractServerAddress(c),
+	}
+	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
+	call.SetParam(1, ctx)
+	data := make(map[string]interface{})
+	data["ctx"] = ctx
+	data["request"] = &ollamaReq
+	call.SetData(data)
+}
+
+//go:linkname clientListOnExit github.com/ollama/ollama/api.clientListOnExit
+func clientListOnExit(call api.CallContext, resp *ollamaapi.ListResponse, err error) {
+	data, ok := call.GetData().(map[string]interface{})
+	if !ok {
+		return
+	}
+	ctx, ok := data["ctx"].(context.Context)
+	if !ok {
+		return
+	}
+	reqPtr, ok := data["request"].(*ollamaRequest)
+	if !ok || reqPtr == nil {
+		return
+	}
+	ollamaResp := ollamaResponse{
+		err: err,
+	}
+	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
+}
+
+//go:linkname clientShowOnEnter github.com/ollama/ollama/api.clientShowOnEnter
+func clientShowOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.ShowRequest) {
+	ollamaReq := ollamaRequest{
+		operationType:  "show",
+		model:          req.Model,
+		modelOperation: "show",
+		serverAddress:  extractServerAddress(c),
+	}
+	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
+	call.SetParam(1, ctx)
+	data := make(map[string]interface{})
+	data["ctx"] = ctx
+	data["request"] = &ollamaReq
+	call.SetData(data)
+}
+
+//go:linkname clientShowOnExit github.com/ollama/ollama/api.clientShowOnExit
+func clientShowOnExit(call api.CallContext, resp *ollamaapi.ShowResponse, err error) {
+	data, ok := call.GetData().(map[string]interface{})
+	if !ok {
+		return
+	}
+	ctx, ok := data["ctx"].(context.Context)
+	if !ok {
+		return
+	}
+	reqPtr, ok := data["request"].(*ollamaRequest)
+	if !ok || reqPtr == nil {
+		return
+	}
+	ollamaResp := ollamaResponse{
+		err: err,
+	}
+	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
+}
+
+//go:linkname clientDeleteOnEnter github.com/ollama/ollama/api.clientDeleteOnEnter
+func clientDeleteOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.DeleteRequest) {
+	ollamaReq := ollamaRequest{
+		operationType:  "delete",
+		model:          req.Model,
+		modelOperation: "delete",
+		serverAddress:  extractServerAddress(c),
+	}
+	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
+	call.SetParam(1, ctx)
+	data := make(map[string]interface{})
+	data["ctx"] = ctx
+	data["request"] = &ollamaReq
+	call.SetData(data)
+}
+
+//go:linkname clientDeleteOnExit github.com/ollama/ollama/api.clientDeleteOnExit
+func clientDeleteOnExit(call api.CallContext, err error) {
+	data, ok := call.GetData().(map[string]interface{})
+	if !ok {
+		return
+	}
+	ctx, ok := data["ctx"].(context.Context)
+	if !ok {
+		return
+	}
+	reqPtr, ok := data["request"].(*ollamaRequest)
+	if !ok || reqPtr == nil {
+		return
+	}
+	ollamaResp := ollamaResponse{
+		err: err,
+	}
+	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
+}
+
+//go:linkname clientCopyOnEnter github.com/ollama/ollama/api.clientCopyOnEnter
+func clientCopyOnEnter(call api.CallContext, c *ollamaapi.Client, ctx context.Context, req *ollamaapi.CopyRequest) {
+	ollamaReq := ollamaRequest{
+		operationType:  "copy",
+		model:          req.Source,
+		modelOperation: "copy",
+		serverAddress:  extractServerAddress(c),
+	}
+	ctx = ollamaInstrumenter.Start(ctx, ollamaReq)
+	call.SetParam(1, ctx)
+	data := make(map[string]interface{})
+	data["ctx"] = ctx
+	data["request"] = &ollamaReq
+	data["destination"] = req.Destination
+	call.SetData(data)
+}
+
+//go:linkname clientCopyOnExit github.com/ollama/ollama/api.clientCopyOnExit
+func clientCopyOnExit(call api.CallContext, err error) {
+	data, ok := call.GetData().(map[string]interface{})
+	if !ok {
+		return
+	}
+	ctx, ok := data["ctx"].(context.Context)
+	if !ok {
+		return
+	}
+	reqPtr, ok := data["request"].(*ollamaRequest)
+	if !ok || reqPtr == nil {
+		return
+	}
+	ollamaResp := ollamaResponse{
+		err: err,
+	}
 	ollamaInstrumenter.End(ctx, *reqPtr, ollamaResp, err)
 }

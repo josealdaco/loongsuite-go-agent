@@ -9,6 +9,7 @@ otelbuild
 otelbuild-*
 otel
 otel-*
+!pkg/rules/otel-*
 *.log
 .otel-build
 
@@ -31,7 +32,7 @@ test/zap/test_zap
 test/gorm/v1.22.0/test_gorm_crud
 test/gorm/v1.23.1/test_gorm_crud
 test/golog/test_glog
-test/grpc/v1.44.0/test_grpc_basic
+test/grpc/v1.77.0/test_grpc_basic
 test/fasthttp/v1.45.0/test_basic_http
 test/hertz/v0.10.1/test_hertz_basic
 test/world/world
@@ -129,3 +130,10 @@ otel.runtime.go
 *.so
 test/sharedlib/sharedlib
 example/nethttp/demo
+test/dependencies/main
+node_modules
+docs/.vitepress/dist
+docs/.vitepress/cache
+test/build/go.work.sum
+test/dubbo/v3.3.0/test_dubbo_basictest.test
+test/dubbo/v3.3.0/test_dubbo_basic
