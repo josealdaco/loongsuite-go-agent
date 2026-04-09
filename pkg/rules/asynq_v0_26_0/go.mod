@@ -1,6 +1,6 @@
 module github.com/alibaba/loongsuite-go-agent/pkg/rules/asynq_v0_26_0
 
-go 1.24
+go 1.24.0
 
 replace github.com/alibaba/loongsuite-go-agent/pkg => ../../../pkg
 

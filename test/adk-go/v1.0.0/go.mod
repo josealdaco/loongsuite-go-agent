@@ -1,6 +1,6 @@
 module test-adk-go
 
-go 1.24.4
+go 1.25.0
 
 replace github.com/alibaba/loongsuite-go-agent => ../../../
 

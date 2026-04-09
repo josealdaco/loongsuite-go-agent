@@ -1,6 +1,6 @@
 module asynq/v0.26.0
 
-go 1.24
+go 1.24.0
 
 replace github.com/alibaba/loongsuite-go-agent => ../../../
 

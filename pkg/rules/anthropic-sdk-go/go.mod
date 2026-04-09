@@ -1,6 +1,6 @@
 module github.com/alibaba/loongsuite-go-agent/pkg/rules/anthropic-sdk-go
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/alibaba/loongsuite-go-agent/pkg v0.0.0-00010101000000-000000000000
