@@ -61,8 +61,9 @@ func clientOnEnter(call api.CallContext, t *http.Transport, req *http.Request) {
 	ctx := netHttpClientInstrumenter.Start(req.Context(), netHttpRequest)
 	req = req.WithContext(ctx)
 	call.SetParam(1, req)
-	data := make(map[string]interface{}, 1)
+	data := make(map[string]interface{}, 2)
 	data["ctx"] = ctx
+	data["request"] = netHttpRequest
 	call.SetData(data)
 	return
 }
@@ -86,12 +87,16 @@ func clientOnExit(call api.CallContext, res *http.Response, err error) {
 			host:    res.Request.Host,
 			isTls:   res.Request.TLS != nil,
 		}, &netHttpResponse{
-			statusCode: res.StatusCode,
-			header:     res.Header,
+			statusCode:  res.StatusCode,
+			header:      res.Header,
+			hasResponse: true,
 		}, err)
 	} else {
-		netHttpClientInstrumenter.End(ctx, &netHttpRequest{}, &netHttpResponse{
-			statusCode: 500,
-		}, err)
+		// Major #5: 防御性类型断言以避免在 nil 或类型不匹配时 panic；并在失败时降级收尾以保证闭合 span
+		request, ok := data["request"].(*netHttpRequest)
+		if !ok {
+			request = &netHttpRequest{}
+		}
+		netHttpClientInstrumenter.End(ctx, request, &netHttpResponse{}, err)
 	}
 }
