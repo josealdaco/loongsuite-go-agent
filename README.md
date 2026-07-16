@@ -37,7 +37,7 @@ $ make install # build and install
 
 Make sure the tool is installed:
 ```bash
-$ # You may use "otel" instead of "otel"
+$ # You may use "otel-linux-amd64" instead of "otel"
 $ otel version
 ```
 

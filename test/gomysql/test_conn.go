@@ -18,7 +18,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/alibaba/loongsuite-go-agent/test/verifier"
+	"github.com/alibaba/loongsuite-go/test/verifier"
 	"github.com/go-mysql-org/go-mysql/client"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
