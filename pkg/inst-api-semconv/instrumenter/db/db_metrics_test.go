@@ -202,3 +202,37 @@ func TestNilMeter(t *testing.T) {
 		panic(err)
 	}
 }
+
+func TestDbClientMetricsMissingContext(t *testing.T) {
+	reader := metric.NewManualReader()
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName("my-service"),
+		semconv.ServiceVersion("v0.1.0"),
+	)
+	mp := metric.NewMeterProvider(metric.WithResource(res), metric.WithReader(reader))
+	meter := mp.Meter("test-meter")
+	client, err := newDbClientMetric("test", meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// End without matching OnBeforeEnd should not panic.
+	client.OnAfterEnd(context.Background(), nil, time.Now())
+}
+
+func TestDbClientMetricsWrongTypeContext(t *testing.T) {
+	reader := metric.NewManualReader()
+	res := resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName("my-service"),
+		semconv.ServiceVersion("v0.1.0"),
+	)
+	mp := metric.NewMeterProvider(metric.WithResource(res), metric.WithReader(reader))
+	meter := mp.Meter("test-meter")
+	client, err := newDbClientMetric("test", meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), attribute.Key("test"), "not-a-dbMetricContext")
+	client.OnAfterEnd(ctx, nil, time.Now())
+}
